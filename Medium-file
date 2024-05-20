@@ -1,0 +1,1153 @@
+One of the best ways to show off your DevOps skills is to create an example project and include it in your portfolio.
+
+In this tutorial, I will show you how to write a simple Python service and how to define and create a CI/CD pipeline for the service.
+
+I will use GitHub Actions, Docker, Sonar Cloud, Snyk, and AWS services.
+
+The project idea comes from a real-life exercise I received during one of my job interview processes.
+
+
+Here is my code for this project:
+https://github.com/Andrey-B-lab/counter-service-exercise
+
+Here is the app on the web:
+http://andreyaws.com/
+
+Prerequisites.
+Basic understanding in:
+
+CI/CD: read here
+git
+GitHub Actions
+AWS ECR
+AWS EC2
+Docker: read here
+docker-compose: read here
+Dockerfile
+Sonar Cloud
+Snyk
+Free accounts:
+
+GitHub account:
+https://github.com/
+AWS account:
+https://aws.amazon.com/free/
+Sonar Cloud account:
+https://www.sonarsource.com/products/sonarcloud/signup/
+Snyk account:
+https://app.snyk.io/login/
+Install on your local PC:
+
+git
+Docker
+Python
+Visual Studio Code or any other source-code editor you prefer
+Project goals and definitions:
+Develop a service called “counter-service.”
+It should maintain a web page with a counter for the number of POST requests it has served and return it for every GET request it gets.
+The code should be as simple as possible, yet well documented and robust.
+The counter-service needs to be exposed on port 80.
+Build the counter-service into a Docker image and deploy it as a Docker container to the EC2 instance.
+Short service downtime is acceptable when re-deploying a service.
+Upon commit & push, the code should pass CI/CD and end up as a running Docker container on the EC2 instance.
+Project implementation steps:
+Create a GitHub repository on github.com and clone it locally.
+Develop the counter-service app in Python, run it, and test it locally.
+Create a Dockerfile for the counter-service app, build an image, run it, and test it locally.
+Create an EC2 Ubuntu instance for the counter-service app and install Docker on it.
+Push your code to GitHub.
+Create an ECR repository.
+Write GitHub Actions for CI (build the image and push it to ECR).
+Add the Sonar Cloud and Snyk tests to CI.
+Write GitHub Actions for CD (pull the image from the ECR to the EC2 instance and run it using Docker Compose).
+Purchase a domain name on AWS Route 53 and connect it to the EC2 instance. This is an optional step, as a domain name costs money.
+Step 1: Create a GitHub repository for the project and clone it.
+If you want to see my final code for this exercise, it’s here in this repository: https://github.com/Andrey-B-lab/counter-service-exercise
+
+You better don’t fork mine, but create an empty repository and start from scratch. This way, you will learn about the project and better understand it.
+
+Remember, if you plan to show this project in an interview, be ready to talk about every piece of code in it and explain why you wrote it.
+
+So create an empty repository, clone it to your local PC, and write the code yourself.
+
+Step 2: Develop the counter-service app in Python and test it locally.
+Firstly, I hope you are always creating a virtual environment when developing new applications. If not, you should start to do it.
+
+Read about it here: https://docs.python.org/3/library/venv.html.
+
+I called my file counter-service.py.
+
+I assumed the counter number needed to be permanent, so I added a counter file to the code and a Docker volume to docker-compose.yml.
+
+counter-service.py contains four functions:
+
+read_counter—reads and returns the current counter value from the file. If the file doesn’t exist, it returns 0.
+update_counter—updates the counter file with the new counter value.
+handle_request—handles GET and POST requests to the root endpoint.
+GET request returns the current count of POST requests.
+POST request increments the counter and returns the updated count.
+health_check—performs a simple health check of the application.
+It tries to read the counter file as a basic check.
+From my point of view, it’s a quick and acceptable solution for the current setup. However, if you are planning to scale the app or make another usage except proof of concept, you should consider a NoSQL database or an in-memory datastore to maintain the counter state, or both.
+
+If you want the count number to reset on every container restart, you can remove the volume.
+
+If you want the counter to reset on the new image version release, you can achieve it by adding version tracking to the Docker image and, in the app, implementing logic that runs at startup to compare the current version (from the Docker image) with the version stored in the persistent volume.
+
+I also added a health check function that performs a simple health check on the application. It tries to read the counter file as a basic check.
+
+Here is the application code. It’s well commented, so you can read what each function does:
+
+from flask import Flask, request, jsonify
+import os
+
+app = Flask(__name__)
+
+# Define the path for the counter file to store the data in Docker Volume
+COUNTER_FILE = "/data/counter.txt"
+
+def read_counter():
+    """
+    Reads and returns the current counter value from the file.
+    If the file doesn't exist, it return 0.
+    
+    Returns:
+        int: The current counter value.
+    """
+    if os.path.exists(COUNTER_FILE):
+        with open(COUNTER_FILE, "r") as f:
+            return int(f.read().strip())
+    else:
+        return 0
+
+def update_counter(counter):
+    """
+    Updates the counter file with the new counter value.
+    
+    Args:
+        counter (int): The new counter value to write to the file.
+    """
+    with open(COUNTER_FILE, "w") as f:
+        f.write(str(counter))
+
+@app.route('/', methods=['GET', 'POST'])
+def handle_request():
+    """
+    Handles GET and POST requests to the root endpoint.
+    GET request returns the current count of POST requests.
+    POST request increments the counter and returns the updated count.
+    
+    Returns:
+        str: The response message with the current or updated counter.
+    """
+    counter = read_counter()
+    if request.method == 'POST':
+        # Increment the counter for each POST request and update the file.
+        counter += 1
+        update_counter(counter)
+        return f"POST requests counter updated. Current count: {counter}"
+    else:
+        # For GET requests, just return the current count.
+        return f"Current POST requests count: {counter}"
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """
+    Performs a simple health check of the application.
+    It tries to read the counter file as a basic check.
+    
+    Returns:
+        tuple: A JSON response indicating the health status and the HTTP status code.
+    """
+    try:
+        # Basic health check: Ensure the counter file is accessible.
+        read_counter()
+        return jsonify({"status": "healthy"}), 200
+    except Exception as e:
+        # Return an unhealthy status if any error occurs, e.g., file access issues.
+        return jsonify({"status": "unhealthy", "reason": str(e)}), 500
+
+if __name__ == '__main__':
+    # Run the Flask app with binding to all interfaces on port 8080.
+    # Debug mode is turned off for production use.
+    app.run(host='0.0.0.0', port=8080, debug=False)
+Now, test the counter-service application locally.
+
+Verify you are in the project’s directory.
+Execute python counter-service.py.
+
+
+Open your browser and proceed to http://127.0.0.1:8080/. You should see the POST requests count.
+
+
+By reaching 127.0.0.1:8080 you sent a GET request.
+
+Try to send a POST to the app.
+
+If you are using a Windows PC, your POST request looks like this:
+
+Invoke-WebRequest -Uri http://127.0.0.1:8080 -Method POST
+If you are using Mac or Linux, you can use curl:
+
+curl -X POST http://127.0.0.1:8080
+You can use Postman as well.
+
+When sending the POST request, the counter gets updated:
+
+
+Refresh the browser (send GET request) and verify that:
+
+
+It works locally. Let’s move on.
+
+Step 3: Create a Dockerfile for the counter-service app, build an image, run it, and test it locally.
+The easiest way to create the Dockerfile is to use the docker init command. Before you do that, you need to create a requirements.txt file for the counter-service application.
+
+pip3 freeze > requirements.txt
+Note that the pip3 freeze command includes all packages that are installed with pip install in your environment.
+
+So if you don’t work with the virtual environment when developing in Python (you should!), you will get inside the file all the installed packages and not just the ones needed for the app.
+
+Now, run the docker init command.
+
+You will have 4 questions to answer, just accept the defaults (verify that you defined Python in the first question):
+
+
+Verify the created Dockerfile:
+
+# syntax=docker/dockerfile:1
+
+# Comments are provided throughout this file to help you get started.
+# If you need more help, visit the Dockerfile reference guide at
+# https://docs.docker.com/go/dockerfile-reference/
+
+# Want to help us make this template better? Share your feedback here: https://forms.gle/ybq9Krt8jtBL3iCk7
+
+ARG PYTHON_VERSION=3.12.2
+FROM python:${PYTHON_VERSION}-slim as base
+
+# Prevents Python from writing pyc files.
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# Keeps Python from buffering stdout and stderr to avoid situations where
+# the application crashes without emitting any logs due to buffering.
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Create a non-privileged user that the app will run under.
+# See https://docs.docker.com/go/dockerfile-user-best-practices/
+ARG UID=10001
+RUN adduser \
+    --disabled-password \
+    --gecos "" \
+    --home "/nonexistent" \
+    --shell "/sbin/nologin" \
+    --no-create-home \
+    --uid "${UID}" \
+    appuser
+
+# Download dependencies as a separate step to take advantage of Docker's caching.
+# Leverage a cache mount to /root/.cache/pip to speed up subsequent builds.
+# Leverage a bind mount to requirements.txt to avoid having to copy them into
+# into this layer.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    --mount=type=bind,source=requirements.txt,target=requirements.txt \
+    python -m pip install -r requirements.txt
+
+# Switch to the non-privileged user to run the application.
+USER appuser
+
+# Copy the source code into the container.
+COPY . .
+
+# Expose the port that the application listens on.
+EXPOSE 8000
+
+# Run the application.
+CMD gunicorn 'counter-service:app' --bind=0.0.0.0:8000
+Build the image:
+
+docker build --tag "counter-service-local:1.0.0" .
+
+Run the image:
+
+
+It seems like it works.
+
+However, there is an issue with the COUNTER_FILE, defined in the Python app.
+
+The volume is not defined, so the application doesn’t work as expected. If you try to POST, you will see an error.
+
+Don’t worry, you will fix it on the Linux server during the next steps.
+
+A few notes from me.
+
+I made some changes to the default Dockerfile.
+
+Instead of a slim image, I decided to use alpine because of vulnerability considerations, despite the fact that “python:slim” is smaller and it’s built and reacts faster than “python:alpine.”
+In the current CI/CD setup, I use Snyk, which will find critical vulnerabilities in the slim image on the first “Merge to Main” run and will drop the run. In order to avoid that, I’m using alpine, just to show that the pipeline is working.
+Another change is to use COPY counter-service.py . instead of COPY . . as best practice and vulnerability considerations.
+I changed the application port to 8080, just for convenience, because it’s traditionally used as an alternative to port 80 for web traffic. Anyway, it's an internal TCP container port.
+I enabled logs output.
+Here is my final Dockerfile:
+
+# syntax=docker/dockerfile:1
+ARG PYTHON_VERSION=3.13.0a4
+FROM python:${PYTHON_VERSION}-alpine3.19 as base
+
+# Prevents Python from writing pyc files.
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# Keeps Python from buffering stdout and stderr to avoid situations where
+# the application crashes without emitting any logs due to buffering.
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Create a non-privileged user that the app will run under.
+# See https://docs.docker.com/go/dockerfile-user-best-practices/
+ARG UID=10001
+RUN adduser \
+    --disabled-password \
+    --gecos "" \
+    --home "/nonexistent" \
+    --shell "/sbin/nologin" \
+    --no-create-home \
+    --uid "${UID}" \
+    appuser
+
+# Download dependencies as a separate step to take advantage of Docker's caching.
+# Leverage a cache mount to /root/.cache/pip to speed up subsequent builds.
+# Leverage a bind mount to requirements.txt to avoid having to copy them into
+# into this layer.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    --mount=type=bind,source=requirements.txt,target=requirements.txt \
+    python -m pip install -r requirements.txt
+
+# Switch to the non-privileged user to run the application.
+USER appuser
+
+# Copy the source code(counter-service.py) into the container.
+COPY counter-service.py .
+
+# Expose the port that the application listens on.
+# In most Unix-like operating systems, binding to ports below 1024 requires elevated privileges.
+# This application runs on Docker as an appuser, which is restricted to binding to ports below 1024.
+EXPOSE 8080
+
+# Run the application.Logs enabled to see the output logs
+CMD ["gunicorn", "counter-service:app", "--bind", "0.0.0.0:8080", "--access-logfile", "-", "--error-logfile", "-"]
+Step 4: Create an EC2 Ubuntu 22.04 instance for the counter-service app.
+For simplicity, I will use the AWS Dashboard to create the instance and not the Terraform script.
+
+In the next tutorial, I will add Terraform, Load Balancer, Redis, etc. For now, let’s keep it simple.
+
+Follow the tutorial about how to create an EC2 instance and install Docker on it:
+link to the tutorial
+Define the following network rules:
+
+
+Prepare the EC2 instance for Continuous Deployment.
+
+Create a docker directory in /home/<user>/. You will copy the Docker files inside it.
+Install AWS CLI: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
+Configure AWS credentials on the instance and login to the ECR:
+run aws configure command.
+Retrieve an authentication token and authenticate your Docker client to your registry:
+aws ecr get-login-password - region <your-region> | docker login - username AWS - password-stdin <account-id>.dkr.ecr.eu-west-1.amazonaws.com
+Now that you have installed Docker on the EC2 instance and verified that it works, let’s push your code to GitHub.
+
+Step 5: Push your code to GitHub.
+The main branch in the repository is the default one. Create an additional branch for the tests, name it “development”.
+
+Do not push to the main or development branches. Create a new branch and push to it.
+
+
+It’s done, now create the ECR repository for the Docker images.
+
+Step 6: Create an ECR repository.
+You should name the ECR repository the same as your GitHub repository.
+
+
+The next step is creating CI (Continuous Integration).
+
+Step 7: Write GitHub Actions for CI (build the image and push it to ECR).
+The goal of this step is to create the CI process using GitHub Actions in the following order:
+
+Create a new release:
+Fetch all tags.
+Get the latest tag, assume semver, and sort.
+If there’s no tag yet, start with v0.0.0.
+Increment the patch version.
+Output the next version.
+Create the release.
+For simplicity, I increment the patch version only for each push to development in GitHub Actions. In case needed, there is an option to increment any version by merging from the branches with specific syntax. If pushed from patch/, increment patch version, if pushed from feature/, increment feature version; and so on.
+
+2. Build a Docker image.
+
+Configure AWS credentials.
+Login to Amazon ECR.
+Extract the repository name.
+Build a Docker image.
+Push the image to ECR.
+GitHub Actions yml files stored in .github/workflows directory in GitHub repository.
+
+It’s easier to do it on the github.com website, because you can access the Marketplace for Actions.
+
+Once you are in the repository, press Actions > Simple Workflow.
+
+GitHub will create a file with the minimum necessary structure.
+
+
+
+Change the push to “development” instead of “main”.
+
+Push to development will be a trigger on which GitHub Action will start.
+
+Now you need to write the code for the earlier defined steps.
+
+For the first step (creating a new release), I wrote a custom script that automatically determines the next version number for the project, based on the semantic versioning (semver) scheme. It does not directly reference a GitHub Market Action, but instead, it’s written as a shell script to be executed within a GitHub Actions workflow step. For the next steps, search for the syntax in the Marketplace on the right panel.
+
+Create a new release:
+
+Fetch all tags.
+git fetch --tags
+Get the latest tag, assume semver, and sort.
+LATEST_TAG=$(git tag -l | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)
+If there’s no tag yet, start with v0.0.0.
+if [ -z "$LATEST_TAG" ]; then
+  LATEST_TAG="v0.0.0"
+fi
+Increment the patch version.
+NEXT_TAG=$(echo $LATEST_TAG | awk -F. '{print $1"."$2"."$3+1}')
+Output the next version.
+echo "::set-output name=tag::$NEXT_TAG"
+echo "Next version: $NEXT_TAG"
+Create the release.
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.ACCESS_TOKEN_2 }}
+      with:
+        tag_name: ${{ steps.next_version.outputs.tag }}
+        release_name: Release ${{ steps.next_version.outputs.tag }}
+        draft: false
+        prerelease: false
+Build a Docker image.
+
+Configure AWS credentials.
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: eu-west-1
+Login to Amazon ECR.
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v1
+Extract the repository name.
+    - name: Extract repository name
+      id: repo-name
+      run: |
+        REPO_NAME="${GITHUB_REPOSITORY##*/}"
+        echo "REPO_NAME=$REPO_NAME" >> $GITHUB_ENV
+        echo "::set-output name=repo_name::$REPO_NAME"
+Build a Docker image.
+    - name: Build Docker image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: ${{ env.REPO_NAME }}
+        IMAGE_TAG: ${{ steps.next_version.outputs.tag }}
+      run: |
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+        echo "IMAGE_NAME=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_ENV
+Push the image to ECR.
+    - name: Push Docker image to Amazon ECR
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: counter-service-exercise
+        IMAGE_TAG: ${{ steps.next_version.outputs.tag }}
+      run: |
+        # Tag the image as latest
+        docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        # Push the specific version tag
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        # Push the latest tag
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+As you noticed, I’m using the latest tag in my code.
+
+It’s worth noting that relying on the latest tag in production can be risky, as it might lead to unpredicted behaviors if the image changes unexpectedly.
+
+Despite this, I decided to use the latest tag for training purposes.
+
+I’m using docker-compose, and the easiest way to ensure docker-compose restating with the new image version is to use tag latest.
+
+Here is the full GitHub Action for the CI (I added my comments to the code as well):
+
+name: Build and Push Docker image to AWS ECR
+
+on:
+  push:
+    branches:
+      - development
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out the repo
+      uses: actions/checkout@v2
+      with:
+        fetch-depth: 0 # Necessary to fetch all tags and history
+
+################################################################
+###               DETERMINE NEXT VERSION                     ###
+###   Used for creating new releases and image tags          ###
+################################################################
+
+    - name: Determine Next Version
+      id: next_version
+      run: |
+        # Fetch all tags
+        git fetch --tags
+        
+        # Get the latest tag, assume semver, and sort.
+        LATEST_TAG=$(git tag -l | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)
+        
+        # If there's no tag yet, start with v0.0.0. Used for new repos
+        if [ -z "$LATEST_TAG" ]; then
+          LATEST_TAG="v0.0.0"
+        fi
+        
+        # Increment the patch version
+        NEXT_TAG=$(echo $LATEST_TAG | awk -F. '{print $1"."$2"."$3+1}')
+        
+        # Output the next version
+        echo "::set-output name=tag::$NEXT_TAG"
+        echo "Next version: $NEXT_TAG"
+
+################################################################
+###                     CREATE RELEASE                       ###
+###  Creating release with the tag from the previous step    ###
+################################################################
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.ACCESS_TOKEN_2 }}
+      with:
+        tag_name: ${{ steps.next_version.outputs.tag }}
+        release_name: Release ${{ steps.next_version.outputs.tag }}
+        draft: false
+        prerelease: false
+
+################################################################
+###                  BUILD DOCKER IMAGE                      ###
+###         Build Docker image from the Dockefile            ###
+################################################################
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: eu-west-1
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v1
+
+    - name: Extract repository name
+      id: repo-name
+      run: |
+        REPO_NAME="${GITHUB_REPOSITORY##*/}"
+        echo "REPO_NAME=$REPO_NAME" >> $GITHUB_ENV
+        echo "::set-output name=repo_name::$REPO_NAME"
+
+    - name: Build Docker image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: ${{ env.REPO_NAME }}
+        IMAGE_TAG: ${{ steps.next_version.outputs.tag }}
+      run: |
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+        echo "IMAGE_NAME=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_ENV
+
+###########################################################
+###                  PUSH IMAGE TO ECR                  ###
+###     Tag Docker image as "latest" and push to ECR    ###
+########################################################### 
+
+    - name: Push Docker image to Amazon ECR
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: counter-service-dev
+        IMAGE_TAG: ${{ steps.next_version.outputs.tag }}
+      run: |
+        # Tag the image as latest
+        docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        # Push the specific version tag
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        # Push the latest tag
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+Note that I’m using the following secrets in this code:
+
+GITHUB_TOKEN: ${{ secrets.ACCESS_TOKEN_2 }}
+aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+If you are not familiar with secrets in GitHub Actions, read about it here:
+https://docs.github.com/en/actions/security-guides/using-secrets-in-github-actions
+
+You need to create an IAM user in AWS and assign the necessary permissions (AmazonEC2ContainerRegistryPowerUser).
+
+When you create an Access key for this user, you’ll be provided with an Access Key ID and a Secret Access Key. Make sure to record these securely. The Secret Access Key is only shown once and cannot be retrieved later, though you can always generate a new one if needed.
+
+Save the AWS_ACCESS_KEY_ID and the AWS_SECRET_ACCESS_KEY as GitHub repository secrets.
+
+About the GITHUB_TOKEN.
+
+The actions/create-release action, which is being used to create a release, requires authentication to interact with the GitHub API. While GitHub provides a default GITHUB_TOKEN for workflows, which has a scoped set of permissions for the repository that is running the action, I prefer to create my personal access token and use it.
+
+Read about the personal access tokens here:
+https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens
+
+Push the GitHub Actions code to the Development branch and see if the image will be delivered to ECR by executing GutHub Action.
+
+You can see the GitHub Actions output in real-time in the Actions tab.
+
+
+The GitHub Action run finished without any errors, let’s check the ECR.
+
+
+You should see v0.0.1 if your GitHub Action worked on the first try. The tag will be created for each Action run, it doesn’t matter if it fails or succeeds. The release will be created only if the Action succeeds.
+
+This is why you see v0.0.3 in my repository.
+
+Good job! You have configured Continuous Integration!
+
+Let’s add the code and vulnerability tests to your GitHub Action.
+
+Step 8: Add the Sonar Cloud and Snyk tests.
+The Sonar Cloud scans the code for bugs or vulnerabilities. Snyk scans the code and the base Docker image from the Dockerfile for vulnerabilities.
+
+Sonar Cloud:
+
+Login with your GitHub account to Sonar Cloud.
+Create an Organization (optionally).
+Press + on the right upper corner, then press Analyze new project.
+Search for your project, select it, and press Set Up.
+
+Set Up new project
+
+Choose Previous version and press Create project
+
+Choose GitHub Action as Analysis Method
+You will get exact instructions on what you need to do in order to run the Sonar Cloud test with GitHub Actions.
+
+You will need to create a new SONAR_TOKEN secret, copy the SonarCloud step to your GitHub Actions yml file, and create a sonar-project.properties file.
+
+
+Here is my SonarCloud step:
+
+    - name: SonarCloud Scan
+      uses: SonarSource/sonarcloud-github-action@master
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+    - name: Setup Git
+      run: |
+        git config --global user.name 'github-actions'
+        git config --global user.email 'github-actions@github.com'
+Make sure the Automatic Analysis is off in Administration/Analysis Method.
+
+
+Snyk:
+
+Login to https://snyk.io/ with GitHub.
+Press “Add project ”on the right upper corner > GitHub, choose your repository, and press “Add selected repository.”
+
+Search for the Snyk GitHub Action syntax in Actions Marketplace on GitHub:
+https://github.com/snyk/actions/tree/master/python
+
+How to configure SNYK_TOKEN:
+https://docs.snyk.io/snyk-api/revoking-and-regenerating-snyk-api-tokens
+
+Here is my Snyk step:
+
+    - name: Run Snyk to check Docker image for vulnerabilities
+      uses: snyk/actions/docker@master
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      with:
+         image: ${{ env.IMAGE_NAME }}
+         args: --severity-threshold=high --policy-path=.snyk
+      continue-on-error: false
+Here is my updated GitHub Action that includes SonarCloud and Snyk:
+
+name: Build and Push Docker image to AWS ECR
+
+on:
+  push:
+    branches:
+      - development
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out the repo
+      uses: actions/checkout@v2
+      with:
+        fetch-depth: 0 # Necessary to fetch all tags and history
+
+################################################################
+###               SONAR CLOUD SCAN                           ###
+### Drops the build if any bugs or vulnerabilities are found.###
+###            Using the default quality gate.               ###
+###        Connected to my personal Sonar Cloud account      ###
+################################################################
+
+    - name: SonarCloud Scan
+      uses: SonarSource/sonarcloud-github-action@master
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+    - name: Setup Git
+      run: |
+        git config --global user.name 'github-actions'
+        git config --global user.email 'github-actions@github.com'
+
+################################################################
+###               DETERMINE NEXT VERSION                     ###
+###   Used for creating new releases and image tags          ###
+################################################################
+
+    - name: Determine Next Version
+      id: next_version
+      run: |
+        # Fetch all tags
+        git fetch --tags
+        
+        # Get the latest tag, assume semver, and sort.
+        LATEST_TAG=$(git tag -l | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)
+        
+        # If there's no tag yet, start with v0.0.0. Used for new repos
+        if [ -z "$LATEST_TAG" ]; then
+          LATEST_TAG="v0.0.0"
+        fi
+        
+        # Increment the patch version
+        NEXT_TAG=$(echo $LATEST_TAG | awk -F. '{print $1"."$2"."$3+1}')
+        
+        # Output the next version
+        echo "::set-output name=tag::$NEXT_TAG"
+        echo "Next version: $NEXT_TAG"
+
+################################################################
+###                     CREATE RELEASE                       ###
+###  Creating release with the tag from the previous step    ###
+################################################################
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.ACCESS_TOKEN_2 }}
+      with:
+        tag_name: ${{ steps.next_version.outputs.tag }}
+        release_name: Release ${{ steps.next_version.outputs.tag }}
+        draft: false
+        prerelease: false
+
+################################################################
+###                  BUILD DOCKER IMAGE                      ###
+###         Build Docker image from the Dockefile            ###
+################################################################
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: eu-west-1
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v1
+
+    - name: Extract repository name
+      id: repo-name
+      run: |
+        REPO_NAME="${GITHUB_REPOSITORY##*/}"
+        echo "REPO_NAME=$REPO_NAME" >> $GITHUB_ENV
+        echo "::set-output name=repo_name::$REPO_NAME"
+
+    - name: Build Docker image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: ${{ env.REPO_NAME }}
+        IMAGE_TAG: ${{ steps.next_version.outputs.tag }}
+      run: |
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+        echo "IMAGE_NAME=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_ENV
+
+###########################################################
+###  Docker image Snyk scan | If fails, drop the action ###
+###       Connected to my personal Snyk account         ###
+###     The code owner receives an email notification   ###
+### Possible to configure Slack notification if needed  ###
+###########################################################               
+               
+    - name: Run Snyk to check Docker image for vulnerabilities
+      uses: snyk/actions/docker@master
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      with:
+         image: ${{ env.IMAGE_NAME }}
+         args: --severity-threshold=high --policy-path=.snyk
+      continue-on-error: false
+
+###########################################################
+###                   PUSH IMAGE TO ECR                 ###
+###     Tag Docker image as "latest" and push to ECR    ###
+########################################################### 
+
+    - name: Push Docker image to Amazon ECR
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: counter-service-dev
+        IMAGE_TAG: ${{ steps.next_version.outputs.tag }}
+      run: |
+        # Tag the image as latest
+        docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        # Push the specific version tag
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        # Push the latest tag
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+Push to Development branch and verify it’s working.
+
+
+If all is set, it’s time to create a CD (Continuous Deployment).
+
+Step 9: Write GitHub Actions for CD (pull the image from the ECR to the EC2 instance and run it).
+Pull the image from the ECR to the EC2 instance and run it.
+
+To pull the image from the ECR, we need to define and save as GitHub Action Secrets the following parameters:
+
+EC2 instance PEM key to connect to it (EC2_PEM_KEY).
+EC2 instance IP address or hostname (EC2_HOST).
+Note that the IP of the EC2 instance is temporary by default, and the instance will get a new IP once restarted. You can purchase a static IP if you want.
+
+EC2 instance user (EC2_USER). The default user for Ubuntu servers is ubuntu.
+Here is a detailed explanation of the Deploy to EC2 GitHub Action:
+https://github.com/marketplace/actions/deploy-docker-to-aws-ec2
+
+I will use custom commands to be executed on an EC2 instance within a GitHub Actions workflow step. Here is my GitHub Action step for CD:
+
+    - name: Deploy to EC2
+      env:
+        EC2_PEM_KEY: ${{ secrets.EC2_PEM_KEY }}
+        EC2_HOST: ${{ secrets.EC2_HOST }}
+        EC2_USER: ${{ secrets.EC2_USER }}
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: counter-service-exercise
+        IMAGE_TAG: ${{ steps.next_version.outputs.tag }}
+      run: |
+        # Save PEM key to file and set permissions
+        echo "$EC2_PEM_KEY" > ec2.pem
+        chmod 400 ec2.pem
+
+        # SSH, SCP commands
+        SSH_COMMAND="ssh -i ec2.pem -o StrictHostKeyChecking=no $EC2_USER@$EC2_HOST"
+        SCP_COMMAND="scp -i ec2.pem -o StrictHostKeyChecking=no"
+
+        #Login to the Docker Registry (ECR)
+        $SSH_COMMAND "aws ecr get-login-password --region eu-west-1 | docker login --username AWS --password-stdin $ECR_REGISTRY"
+        
+        # Copy docker-compose.yml to EC2 server
+        $SCP_COMMAND docker-compose.yml $EC2_USER@$EC2_HOST:/home/centos/docker/
+        
+        # Pull and run the Docker container on EC2
+        $SSH_COMMAND "cd /home/ubuntu/docker/ && docker pull $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG && docker compose -f docker-compose.yml up -d --force-recreate"
+        
+        # Cleanup PEM key
+        rm -f ec2.pem
+As you see, I’m using EC2_PEM_KEY to connect to the server. It’s the private key of the EC2 instance from step 4. You should add it as a secret to the GitHub repository.
+
+There is also the step “Login to the Docker Registry (ECR)”. You need it because the ECR login lasts for 12 hours only.
+
+The GitHub Action will also copy docker-compose.yml from the GitHub repository to the EC2 server. So add this file to the GitHub repository.
+
+Here is my docker-compose.yml:
+
+version: '2.4'  # The last version of Docker Compose file format that directly supports mem_limit and cpus
+services:
+  counter-service:
+    container_name: counter-service-exercise
+    image: <aws account id>.dkr.ecr.eu-west-1.amazonaws.com/counter-service-exercise:latest
+    volumes:
+      - ./data:/data
+    ports:
+      - "80:8080"
+    restart: always
+    mem_limit: 256M
+    cpus: 0.5
+Here is what the final GitHub Action file looks like:
+
+name: Build and Push Docker image to AWS ECR
+
+on:
+  push:
+    branches:
+      - development
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out the repo
+      uses: actions/checkout@v2
+      with:
+        fetch-depth: 0 # Necessary to fetch all tags and history
+
+################################################################
+###               SONAR CLOUD SCAN                           ###
+### Drops the build if any bugs or vulnerabilities are found.###
+###            Using the default quality gate.               ###
+###        Connected to my personal Sonar Cloud account      ###
+################################################################
+
+    - name: SonarCloud Scan
+      uses: SonarSource/sonarcloud-github-action@master
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+    - name: Setup Git
+      run: |
+        git config --global user.name 'github-actions'
+        git config --global user.email 'github-actions@github.com'
+
+################################################################
+###               DETERMINE NEXT VERSION                     ###
+###   Used for creating new releases and image tags          ###
+################################################################
+
+    - name: Determine Next Version
+      id: next_version
+      run: |
+        # Fetch all tags
+        git fetch --tags
+        
+        # Get the latest tag, assume semver, and sort.
+        LATEST_TAG=$(git tag -l | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)
+        
+        # If there's no tag yet, start with v0.0.0. Used for new repos
+        if [ -z "$LATEST_TAG" ]; then
+          LATEST_TAG="v0.0.0"
+        fi
+        
+        # Increment the patch version
+        NEXT_TAG=$(echo $LATEST_TAG | awk -F. '{print $1"."$2"."$3+1}')
+        
+        # Output the next version
+        echo "::set-output name=tag::$NEXT_TAG"
+        echo "Next version: $NEXT_TAG"
+
+################################################################
+###                     CREATE RELEASE                       ###
+###  Creating release with the tag from the previous step    ###
+################################################################
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.ACCESS_TOKEN_2 }}
+      with:
+        tag_name: ${{ steps.next_version.outputs.tag }}
+        release_name: Release ${{ steps.next_version.outputs.tag }}
+        draft: false
+        prerelease: false
+
+################################################################
+###                  BUILD DOCKER IMAGE                      ###
+###         Build Docker image from the Dockefile            ###
+################################################################
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: eu-west-1
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v1
+
+    - name: Extract repository name
+      id: repo-name
+      run: |
+        REPO_NAME="${GITHUB_REPOSITORY##*/}"
+        echo "REPO_NAME=$REPO_NAME" >> $GITHUB_ENV
+        echo "::set-output name=repo_name::$REPO_NAME"
+
+    - name: Build Docker image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: ${{ env.REPO_NAME }}
+        IMAGE_TAG: ${{ steps.next_version.outputs.tag }}
+      run: |
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+        echo "IMAGE_NAME=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_ENV
+
+###########################################################
+###  Docker image Snyk scan | If fails, drop the action ###
+###       Connected to my personal Snyk account         ###
+###     The code owner receives an email notification   ###
+### Possible to configure Slack notification if needed  ###
+###########################################################               
+               
+    - name: Run Snyk to check Docker image for vulnerabilities
+      uses: snyk/actions/docker@master
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      with:
+         image: ${{ env.IMAGE_NAME }}
+         args: --severity-threshold=high --policy-path=.snyk
+      continue-on-error: false
+
+###########################################################
+###         PUSH IMAGE TO ECR AND DEPLOY TO EC2         ###
+###     Tag Docker image as "latest" and push to ECR    ###
+###               Deploy to EC2 using SSH               ###
+########################################################### 
+
+    - name: Push Docker image to Amazon ECR
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: counter-service-dev
+        IMAGE_TAG: ${{ steps.next_version.outputs.tag }}
+      run: |
+        # Tag the image as latest
+        docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        # Push the specific version tag
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        # Push the latest tag
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+    - name: Deploy to EC2
+      env:
+        EC2_PEM_KEY: ${{ secrets.EC2_PEM_KEY }}
+        EC2_HOST: ${{ secrets.EC2_HOST }}
+        EC2_USER: ${{ secrets.EC2_USER }}
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: counter-service-dev
+        IMAGE_TAG: ${{ steps.next_version.outputs.tag }}
+      run: |
+        # Save PEM key to file and set permissions
+        echo "$EC2_PEM_KEY" > ec2.pem
+        chmod 400 ec2.pem
+
+        # SSH, SCP commands
+        SSH_COMMAND="ssh -i ec2.pem -o StrictHostKeyChecking=no $EC2_USER@$EC2_HOST"
+        SCP_COMMAND="scp -i ec2.pem -o StrictHostKeyChecking=no"
+
+        #Login to Docker registry
+        $SSH_COMMAND "aws ecr get-login-password --region eu-west-1 | docker login --username AWS --password-stdin $ECR_REGISTRY"
+        
+        # Copy docker-compose.yml to EC2 server
+        $SCP_COMMAND docker-compose.yml $EC2_USER@$EC2_HOST:/home/ubuntu/docker/
+        
+        # Pull and run the Docker container on EC2
+        $SSH_COMMAND "cd /home/ubuntu/docker/ && docker pull $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG && docker compose -f docker-compose.yml up -d --force-recreate"
+        
+        # Cleanup PEM key
+        rm -f ec2.pem
+Push the changes to the Development branch and verify CI/CD works.
+
+
+
+If you type the Public IPv4 address of your EC2 instance into the browser,
+
+If you type the Public IPv4 address of your EC2 instance into the browser, you should see your app.
+
+
+If you try to POST to the app now, you will see an error:
+PermissionError: [Errno 13] Permission denied: ‘/data/counter.txt’
+
+This is because the application, running inside a Docker container, does not have the necessary permissions to write to the file /data/counter.txt. There is a mismatch between the user ID (UID) of the process inside the container and the ownership or permissions of the mounted volume on the host machine.
+
+In the real world, you should use a NoSQL database for this kind of application, but it’s out of the scope of this exercise.
+
+Just give ./data full permissions (sudo chmod -R 777 ./data), and it will work.
+
+POST to it now, and you should see the counter updates:
+
+
+Now, in order to make it work during the push to the main branch, you should only replace the branch name on the top of the yml file.
+
+on:
+  push:
+    branches:
+      - main
+Look at your code again, make sure it has good comments, write good Readme.md, and that’s it.
+
+Now you have one more project for your portfolio.
+
+Good job!
+
+Step 10: Create a DNS in Route 53 and connect it to the EC2 instance.
+This is an optional step, as a DNS record costs money.
+
+Proceed to AWS Route 53 and register a new domain.
+
+Create a new hosted zone.
+
+Create A record and route it to the EC2 instance IP.
+
+Note that the IP of the EC2 instance is temporary by default, and the instance will get a new IP once restarted. You can purchase a static IP if you want.
+
+Verify you can access the app by typing the domain name into the browser. It might take some time for AWS to set it up.
+
+
+General Notes:
+For simplicity, I increment the patch version only for each merge to main in GitHub Actions.
+In case needed, there is an option to increment any version by merging from the branches with specific syntax.
+
+If pushed from patch/, increment patch version, if pushed from feature/, increment feature version; and so on.
+
+if: startsWith(github.head_ref, 'patch/') || startsWith(github.head_ref, 'feature/')
+I assumed the counter number needed to be permanent, so I added Docker volume to docker-compose.yml.
+From my point of view, it’s a quick and acceptable solution for the current setup.
+
+However, if there are plans to scale the app or make another usage except proof of concept, you should consider a NoSQL database or an in-memory datastore to maintain the counter state, or both.
+
+If there is a need for the counter to reset on every container restart, you can remove the volume.
+
+If there is a need for the counter to reset on the new image version release, this can be achieved by adding version tracking to the Docker image and, in the app, implementing logic that runs at startup to compare the current version (from the Docker image) with the version stored in the persistent volume.
+
+I chose to use Gunicorn over Flask to run the app because I wanted to keep the option to scale the app or use it for production in the future, although in the current setup, a flask would be more than enough.
+When the build fails, the code owner receives an email notification by default. There is an option to send instant messages via Slack, Signal, MS Teams, Discord, SMS, voice calls, and more.
+I added the “restart:always” key to docker-compose.yml to always restart the container regardless of the exit status.
+I added a memory and CPU limit to the docker-compose.yml, which works well for simple, local development scenarios.
+I hope you enjoyed it.
+
+Do not hesitate to contact me with any questions.
+
+You can contact me on LinkedIn or send me an email at andrey@juniordevopshub.com.
+
+If you liked my articles, you can join my newsletter, and you will receive weekly DevOps tutorials, articles, and tips every Saturday.
+
+Subscribe here: https://junior-devops-hub.ck.page
